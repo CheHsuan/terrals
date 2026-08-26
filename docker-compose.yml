@@ -1,6 +1,10 @@
 services:
   localstack:
-    image: localstack/localstack:latest
+    # Pinned to the last pre-merge Community image. Since 2026-03-23, the
+    # `latest` tag points to LocalStack's unified image, which requires a
+    # LOCALSTACK_AUTH_TOKEN (free account) even for community features.
+    # This tag predates that change, so no account/token is needed.
+    image: localstack/localstack:4.14.0
     container_name: terrals-localstack
     ports:
       - "4566:4566" # LocalStack Gateway (all services go through this one port)
