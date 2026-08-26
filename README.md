@@ -15,7 +15,7 @@ Lambda + API Gateway 則是 LocalStack 免費版最紮實、最完整支援的�
 這個 repo 會分 6 個步驟逐步長成下面這個樣子（不是一次生成，是一步一步用 commit 疊上去）：
 
 ```
-terals/
+terrals/
 ├── .gitignore
 ├── README.md
 ├── docker-compose.yml              # LocalStack
