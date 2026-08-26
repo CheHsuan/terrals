@@ -1,0 +1,23 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+# NOTE: .terraform.lock.hcl is intentionally NOT ignored — commit it so everyone
+# on the team resolves the same provider versions (standard practice).
+
+# Keep example tfvars but ignore anything marked local/secret
+*.auto.tfvars
+*.local.tfvars
+
+# OS / editor
+.DS_Store
+*.swp
