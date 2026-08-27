@@ -1,6 +1,6 @@
-# Terrals — Self-Service App Platform（Terraform × LocalStack）
+# Terrals — 共用基礎設施平台（Terraform × LocalStack）
 
-Terrals（Terraform + LocalStack）是一個示範「self-service 內部平台」概念的 Terraform 專案：目標是打造一套讓其他開發團隊可以自助部署服務的標準化基礎設施，而不是零散的單一資源範例。所有雲端資源都跑在本機的 [LocalStack](https://www.localstack.cloud/) 上，不需要真的 AWS 帳號、也不會產生費用。
+Terrals（Terraform + LocalStack）是一個示範「共用基礎設施平台」概念的 Terraform 專案：目標是打造一套讓多個開發團隊共用同一套標準化基礎設施部署服務的方式，而不是零散的單一資源範例。所有雲端資源都跑在本機的 [LocalStack](https://www.localstack.cloud/) 上，不需要真的 AWS 帳號、也不會產生費用。
 
 這個 repo 是逐步建置的：每個階段在既有結構上疊加功能，commit 歷史會完整呈現這個平台從單一資源長成一個完整、可部署、有 CI/CD 的專案的過程。
 
@@ -8,7 +8,7 @@ Terrals（Terraform + LocalStack）是一個示範「self-service 內部平台�
 
 多數 Terraform 教材會用 EC2/VPC 當主要情境，但 LocalStack 的免費版對 EC2 只做到 API 層級模擬——資源會被建立、可以查得到，但不會真的開一台機器，無法把服務跑在上面。
 
-Lambda + API Gateway 則是 LocalStack 免費版支援最完整的服務之一：LocalStack 會用 Docker 真的執行上傳的程式碼，API Gateway 也會把 HTTP request 真實轉發進 Lambda 並回傳結果。因此這個平台選擇 Lambda/API Gateway 作為實際可部署的服務層，VPC/EC2/網路設計則作為獨立模組保留（Platform Engineer 的工作仍然離不開網路基礎），但不強行接線到一個「不會真的執行」的運算資源上。
+Lambda + API Gateway 則是 LocalStack 免費版支援最完整的服務之一：LocalStack 會用 Docker 真的執行上傳的程式碼，API Gateway 也會把 HTTP request 真實轉發進 Lambda 並回傳結果。因此這個平台選擇 Lambda/API Gateway 作為實際可部署的服務層，VPC/EC2/網路設計則作為獨立模組保留（工程師的工作仍然離不開網路基礎），但不強行接線到一個「不會真的執行」的運算資源上。
 
 ## 架構
 
@@ -27,7 +27,7 @@ terrals/
 └── .github/workflows/              # terraform-ci.yml
 ```
 
-`envs/<name>/` 從一開始就是各環境程式碼的家，state 依環境用不同的 backend key 完全隔離。`modules/networking` 是獨立的 IaC/網路練習，`modules/app_service` 才是平台實際對外提供的自助部署單元。
+`envs/<name>/` 從一開始就是各環境程式碼的家，state 依環境用不同的 backend key 完全隔離。`modules/networking` 是獨立的 IaC/網路練習，`modules/app_service` 才是平台實際提供給各團隊共用的服務模組。
 
 ## 快速開始
 
@@ -143,7 +143,7 @@ Provider 設定指向 LocalStack 而非真實 AWS：`versions.tf` 釘住 `requir
 ### 階段 3 — Module 化（`modules/`）
 
 運用情境：
-✅ 開發團隊要能自助部署一個對外服務，不需要自己研究 Lambda/API Gateway/IAM 怎麼串起來。
+✅ 多個開發團隊要能共用同一套標準模組部署對外服務，不需要各自研究 Lambda/API Gateway/IAM 怎麼串起來。
 ✅ 平台提供 1 個標準模組（`app_service`），輸入服務名稱與資料表設定，就能拿到一組可運作的 API。
 ✅ Lambda 執行角色僅授權存取自己需要的 DynamoDB 資料表，不使用萬用權限。
 ✅ 另外建置 1 組獨立的 `networking` 模組（VPC/subnet/SG），供之後有私有網路需求時使用。
@@ -200,4 +200,4 @@ Provider 設定指向 LocalStack 而非真實 AWS：`versions.tf` 釘住 `requir
 
 ---
 
-完成以上六個階段後，這個 repo 具備完整結構、remote state、多環境隔離、CI/CD、安全掃描，以及一個真正可以部署並存取的服務，涵蓋了 Platform Engineer 職缺所需的核心 Terraform 實踐。
+完成以上六個階段後，這個 repo 具備完整結構、remote state、多環境隔離、CI/CD、安全掃描，以及一個真正可以部署並存取的服務，涵蓋了軟體工程師職缺所需的核心 Terraform 實踐。
