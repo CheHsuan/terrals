@@ -57,6 +57,17 @@ aws --endpoint-url=http://localhost:4566 apigateway get-rest-apis
 
 > LocalStack 的 `latest` image 自 2026-03-23 起併入 Pro 版並強制要求 `LOCALSTACK_AUTH_TOKEN`，本專案的 [docker-compose.yml](docker-compose.yml) 已釘在合併前最後一版 Community image（`4.14.0`），不需要任何帳號或 token。
 
+## 安全與敏感資訊處理原則
+
+這幾條原則貫穿所有階段，不是單一步驟的事：
+
+- **憑證不進版控**：無論真假，AWS 憑證一律透過環境變數提供，任何 `.tf`／`.tfvars` 檔案裡都不會出現 access key 或 secret 字面值。
+- **State 檔案視為機密資料**：Terraform state 常以明文記錄資源屬性，某些服務的回傳值本身就帶有機敏資訊。因此 remote state 用的 S3 bucket 一定要加密、封鎖公開存取、並限制存取權限——state 外洩的殺傷力不亞於憑證外洩，卻常被忽略。
+- **敏感變數／輸出要明確標記**：任何可能帶有機敏值的 `variable`／`output` 都加上 `sensitive = true`，避免值被印進 `terraform plan`／`apply` 的終端機輸出或 CI log。
+- **S3 bucket 一律封鎖公開存取**：不管是應用程式資料還是 state，每個 S3 bucket 都明確加上 `aws_s3_bucket_public_access_block`，不依賴「預設不公開」的假設。
+- **IAM 最小權限**：每個角色只給它需要的資源與動作，不用萬用字元（`*`），降低單一憑證外洩後的擴散範圍。
+- **CI 不留長效憑證**：LocalStack 是假環境，CI 用寫死的 `test`/`test` 沒有風險；但這裡示範的是「憑證來自環境變數、不寫死在程式碼」的模式，之後接上真實雲端時，正確做法是換成 OIDC federation（GitHub Actions 原生支援直接對 AWS 換發短效憑證），不需要把長效 access key 存成 repo secret。
+
 ---
 
 ## 建置歷程
@@ -68,7 +79,7 @@ aws --endpoint-url=http://localhost:4566 apigateway get-rest-apis
 ✅ 建置 1 組 S3 Bucket，作為之後 Lambda function 程式碼包的存放位置。
 👉 這階段刻意只做「建立 → 確認存在 → 銷毀 → 確認消失」的最小循環，先確保 provider 有正確指向 LocalStack，不會不小心打到真的 AWS。
 
-Provider 設定指向 LocalStack 而非真實 AWS：`versions.tf` 釘住 `required_version`／`required_providers`；`provider.tf` 只設定 `endpoints {}` block 導向 `http://localhost:4566`，並關閉 `skip_credentials_validation`／`skip_metadata_api_check`／`skip_requesting_account_id` 這類只有真實 AWS 才需要的檢查——**憑證本身不寫進 `.tf`**，即使是 `test`/`test` 這種假值，也是透過 `AWS_ACCESS_KEY_ID`／`AWS_SECRET_ACCESS_KEY` 環境變數提供，provider 會自動讀取。這個習慣從練習階段就養成，之後接上真實帳號時不會有把憑證寫進版控的風險。`main.tf` 建立一個 S3 bucket，之後用來存放 Lambda 部署包。
+Provider 設定指向 LocalStack 而非真實 AWS：`versions.tf` 釘住 `required_version`／`required_providers`；`provider.tf` 只設定 `endpoints {}` block 導向 `http://localhost:4566`，並關閉 `skip_credentials_validation`／`skip_metadata_api_check`／`skip_requesting_account_id` 這類只有真實 AWS 才需要的檢查——**憑證本身不寫進 `.tf`**，即使是 `test`/`test` 這種假值，也是透過 `AWS_ACCESS_KEY_ID`／`AWS_SECRET_ACCESS_KEY` 環境變數提供，provider 會自動讀取。這個習慣從練習階段就養成，之後接上真實帳號時不會有把憑證寫進版控的風險。`main.tf` 建立一個 S3 bucket，之後用來存放 Lambda 部署包，並加上 `aws_s3_bucket_public_access_block` 明確封鎖公開存取——即使是練習環境，這個設定也從第一個資源就內建進去，不是之後才補。
 
 **驗證方式**：`terraform apply` 後 `aws s3 ls` 看得到 bucket；`terraform destroy` 後資源真的消失——這是 Terraform 銷毀語意最基本的體現：destroy 不是封存，是直接呼叫 API 刪除。
 
@@ -79,6 +90,7 @@ Provider 設定指向 LocalStack 而非真實 AWS：`versions.tf` 釘住 `requir
 ✅ 建置 1 組 DynamoDB Table，hash key 用唯一識別碼。
 ✅ 所有資源套用公司強制標籤（Project/Environment/Owner/ManagedBy），供財務與稽核追蹤資源歸屬。
 👉 資源命名與規模改用 tfvars 控制，同一份 `.tf` 邏輯之後能直接套用到不同環境，不用改程式碼本身。
+👉 任何未來可能帶有機敏值的變數／輸出都加上 `sensitive = true`，避免它被印進 `terraform plan`／`apply` 的終端機輸出。
 
 新增 `variables.tf`／`terraform.tfvars`／`outputs.tf`，把寫死的值改成變數；新增一張 DynamoDB table 供服務儲存資料；用 `locals` 定義一組共用標籤（`Project`／`Environment`／`Owner`／`ManagedBy = "terraform"`）套用到所有資源，這是多數公司內部規範資源歸屬與成本歸因的標準做法。
 
@@ -109,8 +121,9 @@ Provider 設定指向 LocalStack 而非真實 AWS：`versions.tf` 釘住 `requir
 ✅ 建置 1 組 S3 Bucket 供 remote state 存放（開 versioning），1 組 DynamoDB Table 做 state lock。
 ✅ 兩人同時對同一份環境跑 apply 時，其中一人會被 lock 擋下，不會讓 state 損毀。
 👉 這組 backend 資源要在獨立的 `bootstrap` 專案裡先用 local state 建出來，避免「用 S3 backend 的 state 本身，放在還沒建出來的 S3 bucket 裡」的雞生蛋問題。
+👉 State bucket 開啟預設加密（`server_side_encryption_configuration`）並封鎖公開存取，因為 state 裡的資源屬性可能帶有機敏值，外洩風險不亞於憑證外洩。
 
-`bootstrap/` 用本機 state（刻意不指定 backend，避免自我依賴的雞生蛋問題）建立 remote state 用的 S3 bucket（開 versioning）與 DynamoDB lock table（hash key 為 `LockID`）。`envs/dev` 新增 `backend.tf` 指向這組 backend，`key` 依環境區分（例如 `envs/dev/terraform.tfstate`），並透過 `terraform init -migrate-state` 把既有 state 搬遷過去。
+`bootstrap/` 用本機 state（刻意不指定 backend，避免自我依賴的雞生蛋問題）建立 remote state 用的 S3 bucket（開 versioning、預設加密、封鎖公開存取）與 DynamoDB lock table（hash key 為 `LockID`）。`envs/dev` 新增 `backend.tf` 指向這組 backend，`key` 依環境區分（例如 `envs/dev/terraform.tfstate`），並透過 `terraform init -migrate-state` 把既有 state 搬遷過去。
 
 **驗證方式**：migrate 後 `terraform plan` 不應顯示任何資源需要重建；S3 bucket 內能看到 `.tfstate` 檔案；對同一份 state 同時執行兩個 `terraform apply` 時，DynamoDB lock 會擋下第二個請求。
 
@@ -139,7 +152,7 @@ Provider 設定指向 LocalStack 而非真實 AWS：`versions.tf` 釘住 `requir
 ✅ PR 開啟時自動部署一份暫時環境，並對 API 端點跑真實呼叫驗證服務正常。
 👉 PR 關閉時自動觸發 `destroy`，暫時環境不會變成沒人管、一直佔用資源的孤兒環境（對應到真實 AWS 上就是一直計費的問題）。
 
-`terraform-ci.yml` 在 PR 觸發時執行 `fmt -check`／`validate`／`tflint`／`checkov`／`plan`；`.pre-commit-config.yaml` 讓同樣的檢查在 commit 前就先攔截。因為這個平台部署的服務是真的能執行的，CI 額外加入一個 smoke test：`apply` 到暫時環境後直接 `curl` API Gateway 端點驗證回應內容；並在 PR 關閉時觸發對應的 `terraform destroy`（`on: pull_request: types: [closed]`），實踐「用完即丟」的 ephemeral environment 模式——這是銷毀/回收機制在 CI/CD 層級的落地。
+`terraform-ci.yml` 在 PR 觸發時執行 `fmt -check`／`validate`／`tflint`／`checkov`／`plan`；`.pre-commit-config.yaml` 讓同樣的檢查在 commit 前就先攔截。`checkov` 掃描的重點之一就是抓出 hardcode 憑證、未加密的儲存資源、開放給所有人存取的 IAM policy 這類敏感資訊風險，屬於前面「安全與敏感資訊處理原則」在 CI 層級的落地。因為這個平台部署的服務是真的能執行的，CI 額外加入一個 smoke test：`apply` 到暫時環境後直接 `curl` API Gateway 端點驗證回應內容；並在 PR 關閉時觸發對應的 `terraform destroy`（`on: pull_request: types: [closed]`），實踐「用完即丟」的 ephemeral environment 模式——這是銷毀/回收機制在 CI/CD 層級的落地。連向 LocalStack 用的假憑證直接寫在 workflow 環境變數即可；若之後接上真實雲端，這裡要換成 OIDC federation，而不是把長效 access key 存成 GitHub repo secret。
 
 ---
 
