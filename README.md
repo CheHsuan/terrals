@@ -38,6 +38,14 @@ curl http://localhost:4566/_localstack/health
 
 回應中列出的服務都是 `available` 即代表 LocalStack 已就緒。`docker-compose down` 可以隨時關閉環境，資料不會留在任何真實雲端帳號上。
 
+LocalStack 不驗證憑證是否有效，但 AWS CLI 與 Terraform 的 AWS provider 都要求「有填」東西才會送出請求。假憑證一律透過環境變數提供，不寫進任何 `.tf` 或設定檔：
+
+```bash
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+export AWS_DEFAULT_REGION=us-east-1
+```
+
 常用驗證指令：
 
 ```bash
@@ -60,7 +68,7 @@ aws --endpoint-url=http://localhost:4566 apigateway get-rest-apis
 ✅ 建置 1 組 S3 Bucket，作為之後 Lambda function 程式碼包的存放位置。
 👉 這階段刻意只做「建立 → 確認存在 → 銷毀 → 確認消失」的最小循環，先確保 provider 有正確指向 LocalStack，不會不小心打到真的 AWS。
 
-Provider 設定指向 LocalStack 而非真實 AWS：`versions.tf` 釘住 `required_version`／`required_providers`；`provider.tf` 用假憑證（`test`/`test`）+ `endpoints {}` block 導向 `http://localhost:4566`，並關閉 `skip_credentials_validation`／`skip_metadata_api_check`／`skip_requesting_account_id` 這類只有真實 AWS 才需要的檢查；`main.tf` 建立一個 S3 bucket，之後用來存放 Lambda 部署包。
+Provider 設定指向 LocalStack 而非真實 AWS：`versions.tf` 釘住 `required_version`／`required_providers`；`provider.tf` 只設定 `endpoints {}` block 導向 `http://localhost:4566`，並關閉 `skip_credentials_validation`／`skip_metadata_api_check`／`skip_requesting_account_id` 這類只有真實 AWS 才需要的檢查——**憑證本身不寫進 `.tf`**，即使是 `test`/`test` 這種假值，也是透過 `AWS_ACCESS_KEY_ID`／`AWS_SECRET_ACCESS_KEY` 環境變數提供，provider 會自動讀取。這個習慣從練習階段就養成，之後接上真實帳號時不會有把憑證寫進版控的風險。`main.tf` 建立一個 S3 bucket，之後用來存放 Lambda 部署包。
 
 **驗證方式**：`terraform apply` 後 `aws s3 ls` 看得到 bucket；`terraform destroy` 後資源真的消失——這是 Terraform 銷毀語意最基本的體現：destroy 不是封存，是直接呼叫 API 刪除。
 
