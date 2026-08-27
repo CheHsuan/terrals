@@ -57,6 +57,50 @@ aws --endpoint-url=http://localhost:4566 apigateway get-rest-apis
 
 > LocalStack 的 `latest` image 自 2026-03-23 起併入 Pro 版並強制要求 `LOCALSTACK_AUTH_TOKEN`，本專案的 [docker-compose.yml](docker-compose.yml) 已釘在合併前最後一版 Community image（`4.14.0`），不需要任何帳號或 token。
 
+## 常用 Terraform 指令
+
+每個階段都會反覆用到這些指令，先熟悉一輪：
+
+### 基本工作流程
+
+| 指令 | 用途 |
+|---|---|
+| `terraform init` | 初始化工作目錄、下載 provider。初次使用、新增 module 或改了 backend 設定後都要重跑 |
+| `terraform fmt` | 依官方風格自動排版 `.tf` 檔案 |
+| `terraform validate` | 檢查語法與內部參照是否正確，不會連線到雲端 |
+| `terraform plan` | 比對「程式碼描述的樣子」跟「目前實際狀態」，印出將要變更的內容，不會真的動手 |
+| `terraform apply` | 執行 `plan` 算出來的變更，實際建立／修改／刪除資源；會先跳出確認，`-auto-approve` 可跳過 |
+| `terraform destroy` | 把這份 state 管理的資源全部刪除 |
+
+### 檢查與除錯
+
+| 指令 | 用途 |
+|---|---|
+| `terraform show` | 用人看得懂的格式印出目前 state 內容 |
+| `terraform output` | 印出 `outputs.tf` 定義的輸出值 |
+| `terraform plan -refresh-only` | 只跟雲端同步實際狀態、找出 drift（有人手動改了雲端上的資源），不會產生變更計畫 |
+| `terraform console` | 互動式介面，可即時算 expression、看變數／local 的值，除錯很好用 |
+
+### State 管理
+
+| 指令 | 用途 |
+|---|---|
+| `terraform state list` | 列出這份 state 目前追蹤的所有資源 |
+| `terraform state show <resource>` | 看某個資源在 state 裡記錄的完整屬性 |
+| `terraform state mv <old> <new>` | 幫某個資源在 state 裡改名／搬位置（例如重構成 module 之後），不會動到實際雲端資源 |
+| `terraform state rm <resource>` | 把某個資源從 state 移除，但不刪除它在雲端的實體——讓 Terraform 忘記管它 |
+| `terraform import <resource> <id>` | 把雲端上手動建立、還沒被 Terraform 管理的既有資源，接管進 state |
+
+### 其他實用指令與參數
+
+| 指令／參數 | 用途 |
+|---|---|
+| `terraform apply -replace=<resource>` | 強制重建某個資源（取代舊版的 `terraform taint`） |
+| `terraform plan -var-file=xxx.tfvars` | 指定要套用哪一份 tfvars |
+| `terraform apply -target=<resource>` | 只針對單一資源執行，除錯用，不建議日常依賴 |
+| `terraform providers` | 列出這個專案用到哪些 provider 及版本 |
+| `terraform workspace list` / `new` / `select` | 管理 workspace；這個專案改用 `envs/<name>/` 資料夾分環境、不用 workspace，但這是業界另一種常見做法，值得知道 |
+
 ## 安全與敏感資訊處理原則
 
 這幾條原則貫穿所有階段，不是單一步驟的事：
