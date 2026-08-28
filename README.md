@@ -140,6 +140,8 @@ Provider 設定指向 LocalStack 而非真實 AWS：`versions.tf` 釘住 `requir
 
 **驗證方式**：只改 `terraform.tfvars` 就能改變要建立的資源命名，不用碰任何 `.tf` 邏輯。
 
+👉 這個階段把幾個 resource label 從 kebab-case 統一改成 snake_case，過程中意外踩到一個很值得記錄的問題：即使 `bucket = "..."`／`name = "..."` 這些實際欄位完全沒變，單純改 resource label 也會讓 `terraform plan` 判定成整個 destroy + create——因為 state 是用 resource address 當 key，不是用雲端上的實際身份比對。這個問題、原因，以及三種處理方式（`moved` block／`terraform state mv`／接受重建）的實測比較，整理在 [`docs/renaming-resources.md`](docs/renaming-resources.md)。
+
 ### 階段 3 — Module 化（`modules/`）
 
 運用情境：
