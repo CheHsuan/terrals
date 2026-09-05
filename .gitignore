@@ -18,6 +18,9 @@ terraform.rc
 *.auto.tfvars
 *.local.tfvars
 
+# archive_file build artifacts (regenerated on every apply)
+*.zip
+
 # OS / editor
 .DS_Store
 *.swp

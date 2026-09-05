@@ -19,7 +19,6 @@ terrals/
 ├── docker-compose.yml              # LocalStack
 ├── bootstrap/                      # remote state 用的 S3 bucket + DynamoDB lock table
 ├── modules/
-│   ├── networking/                 # VPC/subnet/route table/security group（獨立模組，未接線到服務）
 │   └── app_service/                # 核心模組：Lambda + API Gateway + DynamoDB + IAM
 ├── envs/
 │   ├── dev/
@@ -27,7 +26,7 @@ terrals/
 └── .github/workflows/              # terraform-ci.yml
 ```
 
-`envs/<name>/` 從一開始就是各環境程式碼的家，state 依環境用不同的 backend key 完全隔離。`modules/networking` 是獨立的 IaC/網路練習，`modules/app_service` 才是平台實際提供給各團隊共用的服務模組。
+`envs/<name>/` 從一開始就是各環境程式碼的家，state 依環境用不同的 backend key 完全隔離。`modules/app_service` 是平台實際提供給各團隊共用的服務模組。
 
 ## 快速開始
 
@@ -148,17 +147,17 @@ Provider 設定指向 LocalStack 而非真實 AWS：`versions.tf` 釘住 `requir
 ✅ 多個開發團隊要能共用同一套標準模組部署對外服務，不需要各自研究 Lambda/API Gateway/IAM 怎麼串起來。
 ✅ 平台提供 1 個標準模組（`app_service`），輸入服務名稱與資料表設定，就能拿到一組可運作的 API。
 ✅ Lambda 執行角色僅授權存取自己需要的 DynamoDB 資料表，不使用萬用權限。
-✅ 另外建置 1 組獨立的 `networking` 模組（VPC/subnet/SG），供之後有私有網路需求時使用。
 👉 這一步的驗收基準是「`curl` 得到真的服務回應」，不是 `terraform apply` 沒報錯而已——因為 LocalStack 真的會執行你的程式碼。
 
-拆出兩個可重用模組：
+拆出一個可重用模組：
 
 - **`modules/app_service`**：核心模組。一支 Lambda function、一個指向它的 API Gateway REST API、一個最小權限的 IAM role（只給必要的 DynamoDB 存取，不用萬用字元），輸出 API invoke URL。
-- **`modules/networking`**：VPC、public/private subnet、route table、security group，作為獨立的網路知識模組，不接線到 `app_service`。
 
-`envs/dev/main.tf` 改為呼叫這兩個模組。
+`envs/dev/<team>/main.tf`（例如 `envs/dev/teamalpha/`、`envs/dev/teambeta/`）各自一份 root，各自呼叫這個模組、各自獨立的 state。
 
 **驗證方式**：`terraform apply` 完成後，`curl` module 輸出的 invoke URL 能拿到真實的 HTTP 回應——這是整個平台第一次「部署了一個服務、也真的打得到它」的里程碑。
+
+多團隊共用同一個模組時的命名與 state 隔離策略，記錄在 [`docs/multi-team-app-service.md`](docs/multi-team-app-service.md)。
 
 ### 階段 4 — Remote State + Locking（`bootstrap/`）
 
