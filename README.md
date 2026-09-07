@@ -2,7 +2,7 @@
 
 Terrals（Terraform + LocalStack）是一個示範「共用基礎設施平台」概念的 Terraform 專案：目標是打造一套讓多個開發團隊共用同一套標準化基礎設施部署服務的方式，而不是零散的單一資源範例。所有雲端資源都跑在本機的 [LocalStack](https://www.localstack.cloud/) 上，不需要真的 AWS 帳號、也不會產生費用。
 
-這個 repo 是逐步建置的：每個階段在既有結構上疊加功能，commit 歷史會完整呈現這個平台從單一資源長成一個完整、可部署、有 CI/CD 的專案的過程。
+這個 repo 是逐步建置的：每個階段在既有結構上疊加功能，commit 歷史會完整呈現這個平台從單一資源長成一個模組化、多團隊共用、可部署的專案的過程；CI/CD 與安全掃描是規劃中的最後一哩路，目前還沒開始做。
 
 ## 設計決策：為什麼是 Lambda + API Gateway，而不是 EC2/VPC？
 
@@ -17,16 +17,17 @@ terrals/
 ├── .gitignore
 ├── README.md
 ├── docker-compose.yml              # LocalStack
+├── docs/                           # 過程中踩到的設計問題與決策記錄
 ├── bootstrap/                      # remote state 用的 S3 bucket + DynamoDB lock table
 ├── modules/
 │   └── app_service/                # 核心模組：Lambda + API Gateway + DynamoDB + IAM
 ├── envs/
-│   ├── dev/
-│   └── prod/                       # lifecycle 保護、版本管理與環境隔離
-└── .github/workflows/              # terraform-ci.yml
+│   ├── dev/                        # 每個團隊各自一份 root（envs/dev/teamalpha/、envs/dev/teambeta/）
+│   └── prod/                       # 規劃中，尚未建立：lifecycle 保護、版本管理與環境隔離
+└── .github/workflows/              # 規劃中，尚未建立：terraform-ci.yml
 ```
 
-`envs/<name>/` 從一開始就是各環境程式碼的家，state 依環境用不同的 backend key 完全隔離。`modules/app_service` 是平台實際提供給各團隊共用的服務模組。
+`envs/<name>/` 從一開始就是各環境程式碼的家；`envs/dev/` 底下每個團隊又各自一份 root，state 依團隊用不同的 backend key 完全隔離。`modules/app_service` 是平台實際提供給各團隊共用的服務模組。
 
 ## 快速開始
 
@@ -168,7 +169,7 @@ Provider 設定指向 LocalStack 而非真實 AWS：`versions.tf` 釘住 `requir
 👉 這組 backend 資源要在獨立的 `bootstrap` 專案裡先用 local state 建出來，避免「用 S3 backend 的 state 本身，放在還沒建出來的 S3 bucket 裡」的雞生蛋問題。
 👉 State bucket 開啟預設加密（`server_side_encryption_configuration`）並封鎖公開存取，因為 state 裡的資源屬性可能帶有機敏值，外洩風險不亞於憑證外洩。
 
-`bootstrap/` 用本機 state（刻意不指定 backend，避免自我依賴的雞生蛋問題）建立 remote state 用的 S3 bucket（開 versioning、預設加密、封鎖公開存取）與 DynamoDB lock table（hash key 為 `LockID`）。`envs/dev` 新增 `backend.tf` 指向這組 backend，`key` 依環境區分（例如 `envs/dev/terraform.tfstate`），並透過 `terraform init -migrate-state` 把既有 state 搬遷過去。
+`bootstrap/dev/`（用本機 state，刻意不指定 backend，避免自我依賴的雞生蛋問題）建立 remote state 用的 S3 bucket（開 versioning、預設加密、封鎖公開存取）與 DynamoDB lock table（hash key 為 `LockID`）。每個團隊各自的 root（`envs/dev/teamalpha/`、`envs/dev/teambeta/`）新增各自的 `backend.tf` 指向這組 backend，`key` 依團隊區分（`envs/dev/teamalpha/terraform.tfstate`、`envs/dev/teambeta/terraform.tfstate`），並透過 `terraform init -migrate-state` 把既有 state 搬遷過去——這是 Stage 3「每個團隊各自一份 state」決策的自然延伸，不是另外發明一套規則。
 
 **驗證方式**：migrate 後 `terraform plan` 不應顯示任何資源需要重建；S3 bucket 內能看到 `.tfstate` 檔案；對同一份 state 同時執行兩個 `terraform apply` 時，DynamoDB lock 會擋下第二個請求。
 
@@ -180,26 +181,24 @@ Provider 設定指向 LocalStack 而非真實 AWS：`versions.tf` 釘住 `requir
 ✅ 某次部署的程式碼有問題、且對應的 Lambda version 也被誤刪，需要能拿回前幾次部署用的舊版 zip 做緊急還原；但版本記錄不能無限累積佔用儲存空間。
 👉 這個階段只在 `envs/prod/teamalpha/` 示範一次，不是把兩個團隊都搬去 prod——重點是驗證生命週期管理機制本身，不是重複勞動複製資料夾。
 
-`envs/prod/teamalpha` 沿用 `envs/dev/teamalpha` 的呼叫方式，改用獨立的 backend key，與 `dev` 完全隔離。這個階段聚焦在 Terraform「建立之後」的行為：
+`envs/prod/teamalpha` 這個 root 本身還沒有實際建立進 repo——三個機制都已經寫進 `modules/app_service`，並用一個一次性、跑完即刪的 scratch root（傳入 `environment = "prod"`）驗證過行為正確，但還沒有變成 `dev` 之外真正存在的第二個環境。這個階段聚焦在 Terraform「建立之後」的行為：
 
 - **`prevent_destroy` 不能吃變數，用 `count` 二選一個資源解決**：`lifecycle` 的 meta-argument（`prevent_destroy`、`create_before_destroy`）跟 `backend` block 一樣，只能寫死字面值，不能引用 `var`/`local`。`modules/app_service` 是 dev/prod 所有團隊共用的同一份模組，不能直接在 `aws_dynamodb_table` 上寫死 `prevent_destroy = true`（會連 dev 也一起鎖住）。做法是用 `count = var.environment == "prod" ? 1 : 0` 讓同一張表依環境對應到兩份定義中的其中一份，只有 prod 那份帶 `prevent_destroy`——這也是「用 `count` 做條件式資源」這個通用技巧的具體案例。
 - **Lambda 版本化 + `aws_lambda_alias`**：`aws_lambda_function` 開 `publish = true`，每次 apply 會產生一個不可變的新 published version；`aws_lambda_alias`（例如 `live`）是可以隨時切換指向哪個 version 的指標，API Gateway 打向 alias、不是直接打向 `$LATEST`——出事只要切換 alias 指向的 version，不用重新部署，這正是「Terraform 沒有內建垃圾回收」的具體例子：舊 version 會持續累積，Terraform 不會自動清理。
-- **`lambda_artifacts` bucket 補上 versioning + lifecycle rule**：開 `aws_s3_bucket_versioning` 讓每次部署都保留舊版 zip；`aws_s3_bucket_lifecycle_configuration` 用 `noncurrent_version_expiration` 的 `newer_noncurrent_versions = 10` 依**數量**保留最近 10 個舊版本（不是依天數），因為 Lambda 端目前沒有主動清理舊 version 的機制、保留窗口不需要跟著天數走；`noncurrent_days` 這個欄位在這個 provider 版本的 schema 裡是必填，給一個很小的值（`3`）純粹滿足格式要求，不構成實質限制。這是 AWS 原生層級的資源回收機制，跟 Terraform 的 `lifecycle` meta-argument 是完全不同的東西，只是剛好同名。
-
-👉 **LocalStack 對這條規則只做設定層模擬，不會真的執行背景清除**：實測部署兩次拿到兩個不同版本、內容也確認對應正確；接著直接對同一個 key 灌 12 次 `PutObject`，等了將近一分鐘，S3 上的舊版本一個都沒被自動清掉，LocalStack log 裡也完全找不到任何過期/刪除的執行紀錄——`terraform apply` 能成功、`get-bucket-lifecycle-configuration` 也能正確讀回設定，但「規則真的會被排程執行」這件事，這個環境沒辦法驗證，只能仰賴 AWS 官方文件的行為保證，或之後接上真實 AWS 才能眼見為憑。
+- **`lambda_artifacts` bucket 補上 versioning + lifecycle rule**：開 `aws_s3_bucket_versioning` 讓每次部署都保留舊版 zip；`aws_s3_bucket_lifecycle_configuration` 用 `noncurrent_version_expiration` 的 `newer_noncurrent_versions = 10` 依**數量**保留最近 10 個舊版本（不是依天數），因為 Lambda 端目前沒有主動清理舊 version 的機制、保留窗口不需要跟著天數走；`noncurrent_days` 這個欄位在這個 provider 版本的 schema 裡是必填，給一個很小的值（`3`）純粹滿足格式要求，不構成實質限制。這是 AWS 原生層級的資源回收機制，跟 Terraform 的 `lifecycle` meta-argument 是完全不同的東西，只是剛好同名。實測部署兩次拿到兩個不同版本、內容也確認對應正確；但 **LocalStack 對這條規則只做設定層模擬，不會真的執行背景清除**——直接對同一個 key 灌 12 次 `PutObject`，等了將近一分鐘，舊版本一個都沒被自動清掉，log 裡也找不到任何過期/刪除的執行紀錄，這件事只能仰賴 AWS 官方文件的行為保證，或之後接上真實 AWS 才能眼見為憑。
 - `ignore_changes` 目前這個平台沒有一個「會被平台外機制修改」的自然欄位可以拿來示範，先不勉強套用，等真的遇到再補。
 
 **核心觀念**：State 是 Terraform 唯一的「誰該存在」真相來源，不在 state 裡卻真實存在雲端的孤兒資源，Terraform 不會主動發現或清除，這也是業界會搭配 `driftctl`／`cloud-nuke` 之類工具做稽核的原因。
 
-### 階段 6 — CI/CD 與安全掃描（`.github/workflows/`）
+### 階段 6 — CI/CD 與安全掃描（`.github/workflows/`）※規劃中，尚未開始實作
 
 運用情境：
 ✅ 開發團隊提交 PR 時，自動跑格式檢查、語法驗證、安全掃描（避免 IAM 給過大權限、S3 bucket 忘記關 public access 這類問題被合併進主幹）。
 ✅ PR 開啟時自動部署一份暫時環境，並對 API 端點跑真實呼叫驗證服務正常。
 👉 PR 關閉時自動觸發 `destroy`，暫時環境不會變成沒人管、一直佔用資源的孤兒環境（對應到真實 AWS 上就是一直計費的問題）。
 
-`terraform-ci.yml` 在 PR 觸發時執行 `fmt -check`／`validate`／`tflint`／`checkov`／`plan`；`.pre-commit-config.yaml` 讓同樣的檢查在 commit 前就先攔截。`checkov` 掃描的重點之一就是抓出 hardcode 憑證、未加密的儲存資源、開放給所有人存取的 IAM policy 這類敏感資訊風險，屬於前面「安全與敏感資訊處理原則」在 CI 層級的落地。因為這個平台部署的服務是真的能執行的，CI 額外加入一個 smoke test：`apply` 到暫時環境後直接 `curl` API Gateway 端點驗證回應內容；並在 PR 關閉時觸發對應的 `terraform destroy`（`on: pull_request: types: [closed]`），實踐「用完即丟」的 ephemeral environment 模式——這是銷毀/回收機制在 CI/CD 層級的落地。連向 LocalStack 用的假憑證直接寫在 workflow 環境變數即可；若之後接上真實雲端，這裡要換成 OIDC federation，而不是把長效 access key 存成 GitHub repo secret。
+**以下是規劃、尚未實作的設計**：`terraform-ci.yml` 在 PR 觸發時執行 `fmt -check`／`validate`／`tflint`／`checkov`／`plan`；`.pre-commit-config.yaml` 讓同樣的檢查在 commit 前就先攔截。`checkov` 掃描的重點之一就是抓出 hardcode 憑證、未加密的儲存資源、開放給所有人存取的 IAM policy 這類敏感資訊風險，屬於前面「安全與敏感資訊處理原則」在 CI 層級的落地。因為這個平台部署的服務是真的能執行的，CI 額外加入一個 smoke test：`apply` 到暫時環境後直接 `curl` API Gateway 端點驗證回應內容；並在 PR 關閉時觸發對應的 `terraform destroy`（`on: pull_request: types: [closed]`），實踐「用完即丟」的 ephemeral environment 模式——這是銷毀/回收機制在 CI/CD 層級的落地。連向 LocalStack 用的假憑證直接寫在 workflow 環境變數即可；若之後接上真實雲端，這裡要換成 OIDC federation，而不是把長效 access key 存成 GitHub repo secret。
 
 ---
 
-完成以上六個階段後，這個 repo 具備完整結構、remote state、多環境隔離、CI/CD、安全掃描，以及一個真正可以部署並存取的服務，涵蓋了軟體工程師職缺所需的核心 Terraform 實踐。
+階段 1–5 已經實作並實測驗證過（`envs/dev/teamalpha`、`envs/dev/teambeta` 兩個團隊都跑得起來）：完整的 module 化結構、多團隊命名與 state 隔離、remote state + locking、prod 專屬的生命週期保護機制。階段 5 的 prod 部分目前只驗證過模組邏輯本身，`envs/prod/` 這個環境還沒有真的建立；階段 6（CI/CD、安全掃描）則完全還在規劃階段，一行 workflow 都還沒寫。這個 repo 目前呈現的是一個「真正可以部署並存取的服務、有多團隊/多環境隔離基礎」的狀態，涵蓋了軟體工程師職缺所需的核心 Terraform 實踐——但還不是六個階段全部完工的最終形態。
