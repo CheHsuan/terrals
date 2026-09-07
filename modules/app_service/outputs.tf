@@ -17,9 +17,9 @@ output "s3_artifacts_arn" {
 }
 
 output "dynamodb_user_table_name" {
-  value = aws_dynamodb_table.user_table.name
+  value = local.user_table.name
 }
 
 output "dynamodb_user_table_arn" {
-  value = aws_dynamodb_table.user_table.arn
+  value = local.user_table.arn
 }

@@ -175,18 +175,18 @@ Provider 設定指向 LocalStack 而非真實 AWS：`versions.tf` 釘住 `requir
 ### 階段 5 — 多環境與生命週期管理（`envs/prod/`）
 
 運用情境：
-✅ 同一套平台要同時服務 dev（開發驗證）與 prod（正式流量），兩者資源與 state 完全隔離。
-✅ prod 的 DynamoDB Table 加上刪除保護，維運人員手滑執行 destroy 或改錯程式碼，也不會真的砍掉正式資料表。
-👉 S3 Bucket 設定 lifecycle rule，只保留 7 天內的版本紀錄，超過 7 天自動清除。
-👉 Lambda 每次部署都會產生新版本，用 alias 指向目前版本；舊版本會持續累積，需要額外清理——這是 Terraform 不會自動幫你做的事。
+✅ 維運人員在 prod 誤執行 `terraform destroy`，或改錯程式碼讓 Terraform 判定某個資源要 destroy + create，正式環境的使用者資料表不會真的被砍掉；同一套 `modules/app_service`，dev 環境的資料表依然可以自由重建，不受影響。
+✅ 團隊部署新版本的服務程式碼時，不能讓正在處理中的 API 請求因為部署而中斷；新版本出問題時要能立刻切回上一個穩定版本，不用重新 apply 舊程式碼。
+✅ 某次部署的程式碼有問題、且對應的 Lambda version 也被誤刪，需要能拿回前幾次部署用的舊版 zip 做緊急還原；但版本記錄不能無限累積佔用儲存空間。
+👉 這個階段只在 `envs/prod/teamalpha/` 示範一次，不是把兩個團隊都搬去 prod——重點是驗證生命週期管理機制本身，不是重複勞動複製資料夾。
 
-`envs/prod` 沿用相同結構，改用獨立的 tfvars 與 backend key，與 `dev` 完全隔離。這個階段聚焦在 Terraform「建立之後」的行為：
+`envs/prod/teamalpha` 沿用 `envs/dev/teamalpha` 的呼叫方式，改用獨立的 backend key，與 `dev` 完全隔離。這個階段聚焦在 Terraform「建立之後」的行為：
 
-- `lifecycle { prevent_destroy = true }` 保護 prod 的 DynamoDB table，避免誤刪。
-- `create_before_destroy = true` 套用在 API Gateway deployment 或 Lambda alias 上，示範零停機替換。
-- `ignore_changes` 處理由平台外機制修改、不該被每次 plan 標記為 diff 的欄位。
-- **Serverless 特有的回收議題**：Lambda 每次部署會產生新的 published version，用 `aws_lambda_alias`（例如 `live`）指向目前版本；舊版本會持續累積，Terraform 不會自動清理——這正是「Terraform 沒有內建垃圾回收」的具體例子。
-- AWS 原生層級的資源回收（與 Terraform 的 lifecycle 是不同層次的機制）：S3 bucket 的 `lifecycle_rule`（過期版本清除、中止未完成的 multipart upload）、DynamoDB table 的 TTL 屬性。
+- **`prevent_destroy` 不能吃變數，用 `count` 二選一個資源解決**：`lifecycle` 的 meta-argument（`prevent_destroy`、`create_before_destroy`）跟 `backend` block 一樣，只能寫死字面值，不能引用 `var`/`local`。`modules/app_service` 是 dev/prod 所有團隊共用的同一份模組，不能直接在 `aws_dynamodb_table` 上寫死 `prevent_destroy = true`（會連 dev 也一起鎖住）。做法是用 `count = var.environment == "prod" ? 1 : 0` 讓同一張表依環境對應到兩份定義中的其中一份，只有 prod 那份帶 `prevent_destroy`——這也是「用 `count` 做條件式資源」這個通用技巧的具體案例。
+- **Lambda 版本化 + `aws_lambda_alias`**：`aws_lambda_function` 開 `publish = true`，每次 apply 會產生一個不可變的新 published version；`aws_lambda_alias`（例如 `live`）是可以隨時切換指向哪個 version 的指標，API Gateway 打向 alias、不是直接打向 `$LATEST`——出事只要切換 alias 指向的 version，不用重新部署，這正是「Terraform 沒有內建垃圾回收」的具體例子：舊 version 會持續累積，Terraform 不會自動清理。
+- **`lambda_artifacts` bucket 補上 versioning + lifecycle rule**：開 `aws_s3_bucket_versioning` 讓每次部署都保留舊版 zip，`aws_s3_bucket_lifecycle_configuration` 只保留 7 天內的版本紀錄，超過自動清除——這是 AWS 原生層級的資源回收機制，跟 Terraform 的 `lifecycle` meta-argument 是完全不同的東西，只是剛好同名。
+- `create_before_destroy = true` 已經在階段 3 修 API Gateway deployment bug 時用過（[modules/app_service/main.tf](modules/app_service/main.tf) 的 `aws_api_gateway_deployment`），這裡不重複示範。
+- `ignore_changes` 目前這個平台沒有一個「會被平台外機制修改」的自然欄位可以拿來示範，先不勉強套用，等真的遇到再補。
 
 **核心觀念**：State 是 Terraform 唯一的「誰該存在」真相來源，不在 state 裡卻真實存在雲端的孤兒資源，Terraform 不會主動發現或清除，這也是業界會搭配 `driftctl`／`cloud-nuke` 之類工具做稽核的原因。
 

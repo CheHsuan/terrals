@@ -7,7 +7,7 @@ locals {
   dynamodb_user_table_name = "${local.name_prefix}-user"
   api_gw_rest_api_name     = "${local.name_prefix}-serverless-lambda-gw"
   seed_user_id             = "123e4567-e89b-12d3-a456-426614174000"
-
+  user_table               = var.environment == "prod" ? aws_dynamodb_table.user_table_protected[0] : aws_dynamodb_table.user_table[0]
 
   common_tags = {
     Project     = local.project
@@ -44,7 +44,7 @@ resource "aws_iam_role_policy" "lambda_dynamodb_read" {
       {
         Effect   = "Allow"
         Action   = ["dynamodb:GetItem"]
-        Resource = aws_dynamodb_table.user_table.arn
+        Resource = local.user_table.arn
       }
     ]
   })
@@ -65,7 +65,7 @@ resource "aws_lambda_function" "hello_world" {
 
   environment {
     variables = {
-      TABLE_NAME   = aws_dynamodb_table.user_table.name
+      TABLE_NAME   = local.user_table.name
       SEED_USER_ID = local.seed_user_id
     }
   }
@@ -101,6 +101,8 @@ resource "aws_s3_object" "hello_world" {
 }
 
 resource "aws_dynamodb_table" "user_table" {
+  count = var.environment == "prod" ? 0 : 1
+
   name           = local.dynamodb_user_table_name
   billing_mode   = var.dynamodb_user_table_billing_mode
   read_capacity  = var.dynamodb_user_table_read_capacity
@@ -115,9 +117,32 @@ resource "aws_dynamodb_table" "user_table" {
   tags = local.common_tags
 }
 
+resource "aws_dynamodb_table" "user_table_protected" {
+  count = var.environment == "prod" ? 1 : 0
+
+  name           = local.dynamodb_user_table_name
+  billing_mode   = var.dynamodb_user_table_billing_mode
+  read_capacity  = var.dynamodb_user_table_read_capacity
+  write_capacity = var.dynamodb_user_table_write_capacity
+  hash_key       = "Id"
+
+  attribute {
+    name = "Id"
+    type = "S"
+  }
+
+  tags = local.common_tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+
+
 resource "aws_dynamodb_table_item" "user_seed" {
-  table_name = aws_dynamodb_table.user_table.name
-  hash_key   = aws_dynamodb_table.user_table.hash_key
+  table_name = local.user_table.name
+  hash_key   = local.user_table.hash_key
 
   item = jsonencode({
     Id    = { S = local.seed_user_id }
