@@ -184,8 +184,9 @@ Provider 設定指向 LocalStack 而非真實 AWS：`versions.tf` 釘住 `requir
 
 - **`prevent_destroy` 不能吃變數，用 `count` 二選一個資源解決**：`lifecycle` 的 meta-argument（`prevent_destroy`、`create_before_destroy`）跟 `backend` block 一樣，只能寫死字面值，不能引用 `var`/`local`。`modules/app_service` 是 dev/prod 所有團隊共用的同一份模組，不能直接在 `aws_dynamodb_table` 上寫死 `prevent_destroy = true`（會連 dev 也一起鎖住）。做法是用 `count = var.environment == "prod" ? 1 : 0` 讓同一張表依環境對應到兩份定義中的其中一份，只有 prod 那份帶 `prevent_destroy`——這也是「用 `count` 做條件式資源」這個通用技巧的具體案例。
 - **Lambda 版本化 + `aws_lambda_alias`**：`aws_lambda_function` 開 `publish = true`，每次 apply 會產生一個不可變的新 published version；`aws_lambda_alias`（例如 `live`）是可以隨時切換指向哪個 version 的指標，API Gateway 打向 alias、不是直接打向 `$LATEST`——出事只要切換 alias 指向的 version，不用重新部署，這正是「Terraform 沒有內建垃圾回收」的具體例子：舊 version 會持續累積，Terraform 不會自動清理。
-- **`lambda_artifacts` bucket 補上 versioning + lifecycle rule**：開 `aws_s3_bucket_versioning` 讓每次部署都保留舊版 zip，`aws_s3_bucket_lifecycle_configuration` 只保留 7 天內的版本紀錄，超過自動清除——這是 AWS 原生層級的資源回收機制，跟 Terraform 的 `lifecycle` meta-argument 是完全不同的東西，只是剛好同名。
-- `create_before_destroy = true` 已經在階段 3 修 API Gateway deployment bug 時用過（[modules/app_service/main.tf](modules/app_service/main.tf) 的 `aws_api_gateway_deployment`），這裡不重複示範。
+- **`lambda_artifacts` bucket 補上 versioning + lifecycle rule**：開 `aws_s3_bucket_versioning` 讓每次部署都保留舊版 zip；`aws_s3_bucket_lifecycle_configuration` 用 `noncurrent_version_expiration` 的 `newer_noncurrent_versions = 10` 依**數量**保留最近 10 個舊版本（不是依天數），因為 Lambda 端目前沒有主動清理舊 version 的機制、保留窗口不需要跟著天數走；`noncurrent_days` 這個欄位在這個 provider 版本的 schema 裡是必填，給一個很小的值（`3`）純粹滿足格式要求，不構成實質限制。這是 AWS 原生層級的資源回收機制，跟 Terraform 的 `lifecycle` meta-argument 是完全不同的東西，只是剛好同名。
+
+👉 **LocalStack 對這條規則只做設定層模擬，不會真的執行背景清除**：實測部署兩次拿到兩個不同版本、內容也確認對應正確；接著直接對同一個 key 灌 12 次 `PutObject`，等了將近一分鐘，S3 上的舊版本一個都沒被自動清掉，LocalStack log 裡也完全找不到任何過期/刪除的執行紀錄——`terraform apply` 能成功、`get-bucket-lifecycle-configuration` 也能正確讀回設定，但「規則真的會被排程執行」這件事，這個環境沒辦法驗證，只能仰賴 AWS 官方文件的行為保證，或之後接上真實 AWS 才能眼見為憑。
 - `ignore_changes` 目前這個平台沒有一個「會被平台外機制修改」的自然欄位可以拿來示範，先不勉強套用，等真的遇到再補。
 
 **核心觀念**：State 是 Terraform 唯一的「誰該存在」真相來源，不在 state 裡卻真實存在雲端的孤兒資源，Terraform 不會主動發現或清除，這也是業界會搭配 `driftctl`／`cloud-nuke` 之類工具做稽核的原因。

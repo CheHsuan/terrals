@@ -89,6 +89,29 @@ resource "aws_s3_bucket" "lambda_artifacts" {
   tags   = local.common_tags
 }
 
+resource "aws_s3_bucket_versioning" "lambda_artifacts" {
+  bucket = aws_s3_bucket.lambda_artifacts.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "lambda_artifacts" {
+  bucket = aws_s3_bucket.lambda_artifacts.id
+
+  rule {
+    id     = "keep-last-10-noncurrent-versions"
+    status = "Enabled"
+
+    filter {}
+
+    noncurrent_version_expiration {
+      newer_noncurrent_versions = 10
+      noncurrent_days           = 3
+    }
+  }
+}
+
 resource "aws_s3_bucket_public_access_block" "lambda_artifacts" {
   bucket                  = aws_s3_bucket.lambda_artifacts.id
   block_public_acls       = true
