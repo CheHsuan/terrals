@@ -1,13 +1,14 @@
 locals {
-  project                  = "terrals"
-  name_prefix              = "${var.owner}-${local.project}"
-  lambda_function_name     = "${local.name_prefix}-hello-world"
-  lambda_artifacts_name    = "${local.name_prefix}-lambda-artifacts"
-  lambda_iam_role_name     = "${local.lambda_function_name}-role"
-  dynamodb_user_table_name = "${local.name_prefix}-user"
-  api_gw_rest_api_name     = "${local.name_prefix}-serverless-lambda-gw"
-  seed_user_id             = "123e4567-e89b-12d3-a456-426614174000"
-  user_table               = var.environment == "prod" ? aws_dynamodb_table.user_table_protected[0] : aws_dynamodb_table.user_table[0]
+  project                         = "terrals"
+  name_prefix                     = "${var.owner}-${local.project}"
+  lambda_function_name            = "${local.name_prefix}-hello-world"
+  lambda_artifacts_name           = "${local.name_prefix}-lambda-artifacts"
+  lambda_function_live_alias_name = "${local.lambda_function_name}-live-alias"
+  lambda_iam_role_name            = "${local.lambda_function_name}-role"
+  dynamodb_user_table_name        = "${local.name_prefix}-user"
+  api_gw_rest_api_name            = "${local.name_prefix}-serverless-lambda-gw"
+  seed_user_id                    = "123e4567-e89b-12d3-a456-426614174000"
+  user_table                      = var.environment == "prod" ? aws_dynamodb_table.user_table_protected[0] : aws_dynamodb_table.user_table[0]
 
   common_tags = {
     Project     = local.project
@@ -56,12 +57,11 @@ resource "aws_lambda_function" "hello_world" {
   s3_bucket = aws_s3_bucket.lambda_artifacts.id
   s3_key    = aws_s3_object.hello_world.key
 
-  runtime = "nodejs20.x"
-  handler = "hello.handler"
-
+  runtime          = "nodejs20.x"
+  handler          = "hello.handler"
   source_code_hash = data.archive_file.hello_world.output_base64sha256
-
-  role = aws_iam_role.lambda_iam_role.arn
+  role             = aws_iam_role.lambda_iam_role.arn
+  publish          = true
 
   environment {
     variables = {
@@ -69,6 +69,12 @@ resource "aws_lambda_function" "hello_world" {
       SEED_USER_ID = local.seed_user_id
     }
   }
+}
+
+resource "aws_lambda_alias" "live" {
+  name             = local.lambda_function_live_alias_name
+  function_name    = aws_lambda_function.hello_world.arn
+  function_version = coalesce(var.lambda_alias_version, aws_lambda_function.hello_world.version)
 }
 
 data "archive_file" "hello_world" {
@@ -174,7 +180,7 @@ resource "aws_api_gateway_integration" "hello" {
   http_method             = aws_api_gateway_method.hello_get.http_method
   integration_http_method = "POST"
   type                    = "AWS_PROXY"
-  uri                     = aws_lambda_function.hello_world.invoke_arn
+  uri                     = aws_lambda_alias.live.invoke_arn
 }
 
 resource "aws_api_gateway_deployment" "this" {
@@ -204,6 +210,7 @@ resource "aws_lambda_permission" "api_gateway" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.hello_world.function_name
   principal     = "apigateway.amazonaws.com"
+  qualifier     = aws_lambda_alias.live.name
 
   source_arn = "${aws_api_gateway_rest_api.this.execution_arn}/*/*"
 }

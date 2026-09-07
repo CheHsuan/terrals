@@ -6,6 +6,11 @@ variable "owner" {
   type = string
 }
 
+variable "lambda_alias_version" {
+  type    = string
+  default = null
+}
+
 variable "dynamodb_user_table_billing_mode" {
   type    = string
   default = "PROVISIONED"
